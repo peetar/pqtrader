@@ -217,6 +217,24 @@ WTB Spiritualist's Ring MQ (posky)`;
       pricePp: null,
       tradeMetadata: null,
     });
+
+    // Bare pqdi.cc URL without Markdown label: "WTS https://www.pqdi.cc/item/7122 5k"
+    const bareUrlRes = parseAuctionMessage(
+      'WTS https://www.pqdi.cc/item/7122 5k',
+      'trade',
+      'peetar'
+    );
+    expect(bareUrlRes.actorName).toBe('peetar');
+    expect(bareUrlRes.listings).toHaveLength(1);
+    expect(bareUrlRes.listings[0]).toMatchObject({
+      listingType: 'WTS',
+      itemId: 7122,
+      itemName: 'Arachnid Antennae',
+      actorName: 'peetar',
+      currencyType: 'PP',
+      pricePp: 5000,
+      tradeMetadata: null,
+    });
   });
 
   it('parses multi-item WTS + WTB compound messages with k and pp prices and aliases', () => {

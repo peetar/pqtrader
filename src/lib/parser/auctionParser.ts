@@ -77,9 +77,10 @@ export const ITEM_ALIASES: Record<string, string> = {
 
 const PARCHMENT_ITEM_IDS = new Set([29111, 29112, 29131, 29132]);
 
-// Build fast first-word indexed phrase matcher
+// Build fast first-word indexed phrase matcher + direct ID lookup
 const PHRASE_INDEX = new Map<string, { words: string[]; entry: LookupEntry }[]>();
 const SPELL_BARE_INDEX = new Map<string, { words: string[]; entry: LookupEntry }[]>();
+const ITEM_BY_ID = new Map<number, LookupEntry>();
 
 function tokenizeWords(text: string): { word: string; start: number; end: number }[] {
   const tokens: { word: string; start: number; end: number }[] = [];
@@ -118,32 +119,64 @@ function canonicalBucketKey(word: string): string {
 }
 
 /**
- * Replaces Markdown PQDI links like:
+ * Replaces both Markdown PQDI links:
  *   "[Glyphed Rune Word](https://www.pqdi.cc/item/0029132)"
- * with just the clean item text ("Glyphed Rune Word") so the URL never pollutes metadata,
- * while also returning a map of link labels -> explicit itemId from the PQDI URL.
+ * and bare PQDI links:
+ *   "WTS https://www.pqdi.cc/item/7122 5k"
+ * with the clean item name ("Glyphed Rune Word" / "Arachnid Antennae") so the URL never
+ * pollutes metadata, while also returning a map of normalized labels -> explicit itemId.
  */
 export function cleanPqdiLinksFromText(text: string): {
   cleanedText: string;
   explicitIdsByNormLabel: Map<string, number>;
 } {
+  initMatcherIndexes();
   const explicitIdsByNormLabel = new Map<string, number>();
 
   // 1) Replace [Label](https://www.pqdi.cc/item/0029132) -> Label
   let cleanedText = text.replace(
     /\[([^\]]+)\]\(\s*https?:\/\/(?:www\.)?pqdi\.cc\/item\/0*(\d+)[^)]*\)/gi,
     (_full, label: string, idStr: string) => {
-      const cleanLabel = label.trim();
       const itemId = parseInt(idStr, 10);
-      if (cleanLabel && !Number.isNaN(itemId) && itemId > 0) {
-        explicitIdsByNormLabel.set(cleanLabel.toLowerCase().replace(/`/g, "'"), itemId);
+      const idEntry = !Number.isNaN(itemId) ? ITEM_BY_ID.get(itemId) : undefined;
+      const rawLabel = label.trim();
+      const resolvedLabel =
+        !rawLabel || /^https?:\/\//i.test(rawLabel)
+          ? idEntry?.name || rawLabel
+          : rawLabel;
+
+      if (resolvedLabel && !Number.isNaN(itemId) && itemId > 0) {
+        explicitIdsByNormLabel.set(resolvedLabel.toLowerCase().replace(/`/g, "'"), itemId);
       }
-      return cleanLabel;
+      return resolvedLabel;
     }
   );
 
-  // 2) Also strip any bare https://www.pqdi.cc/item/... URLs
-  cleanedText = cleanedText.replace(/https?:\/\/(?:www\.)?pqdi\.cc\/item\/\d+\S*/gi, '').trim();
+  // 2) Replace bare https://www.pqdi.cc/item/<id> URLs with the item's canonical name from ITEM_BY_ID
+  cleanedText = cleanedText
+    .replace(
+      /<?https?:\/\/(?:www\.)?pqdi\.cc\/item\/0*(\d+)[^\s>]*>?/gi,
+      (_full, idStr: string, offset: number, currentStr: string) => {
+        const itemId = parseInt(idStr, 10);
+        if (!Number.isNaN(itemId) && itemId > 0) {
+          const entry = ITEM_BY_ID.get(itemId);
+          if (entry) {
+            const normName = entry.name.toLowerCase().replace(/`/g, "'");
+            explicitIdsByNormLabel.set(normName, itemId);
+            // If the surrounding text doesn't already mention the item name right before the URL,
+            // substitute the canonical item name in place of the URL.
+            const beforeSlice = currentStr.slice(0, offset).toLowerCase().replace(/`/g, "'");
+            if (beforeSlice.includes(normName)) {
+              return '';
+            }
+            return ` ${entry.name} `;
+          }
+        }
+        return '';
+      }
+    )
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 
   return { cleanedText, explicitIdsByNormLabel };
 }
@@ -279,6 +312,7 @@ function initMatcherIndexes() {
   };
 
   for (const [normName, entry] of Object.entries(rawTradeableMap)) {
+    ITEM_BY_ID.set(entry.id, entry);
     addPhrase(PHRASE_INDEX, normName, entry);
 
     if (normName.startsWith('spell: ')) {
