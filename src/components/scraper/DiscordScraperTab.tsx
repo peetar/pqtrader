@@ -849,8 +849,23 @@ export const DiscordScraperTab: React.FC<DiscordScraperTabProps> = ({
                 {sandboxEvaluation.extracted.map((l, idx) => (
                   <div
                     key={`${l.itemId}-${idx}`}
-                    className="flex items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-950/80 p-2.5 text-xs"
+                    title={l.rawMessage}
+                    className="group relative flex items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-950/80 p-2.5 text-xs transition hover:border-amber-500/50"
                   >
+                    {l.rawMessage && (
+                      <div
+                        className={`pointer-events-none invisible absolute left-2 right-2 z-30 rounded-lg border border-amber-500/40 bg-slate-950/95 p-2.5 shadow-xl backdrop-blur-sm group-hover:visible ${
+                          idx === 0 ? 'top-full mt-1' : 'bottom-full mb-1'
+                        }`}
+                      >
+                        <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-amber-400">
+                          Source Message
+                        </div>
+                        <div className="whitespace-pre-wrap break-words font-mono text-[11px] text-slate-100">
+                          {l.rawMessage}
+                        </div>
+                      </div>
+                    )}
                     <div>
                       <div className="flex items-center gap-1.5">
                         <span
@@ -1008,8 +1023,13 @@ export const DiscordScraperTab: React.FC<DiscordScraperTabProps> = ({
       {/* SUB-TAB 3: LIVE / BACKFILLED FEED */}
       {activeSubTab === 'LIVE_FEED' && (
         <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-4">
-          <div className="mb-3 text-sm font-bold text-slate-200">
-            Session Extracted Listings ({liveListings.length})
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-sm font-bold text-slate-200">
+              Session Extracted Listings ({liveListings.length})
+            </span>
+            <span className="text-xs text-slate-400">
+              Hover any row to inspect the original plain-text Discord message
+            </span>
           </div>
           {liveListings.length === 0 ? (
             <div className="py-8 text-center text-xs text-slate-500">
@@ -1017,12 +1037,27 @@ export const DiscordScraperTab: React.FC<DiscordScraperTabProps> = ({
               Discord listings here.
             </div>
           ) : (
-            <div className="space-y-1.5 max-h-96 overflow-y-auto">
+            <div className="space-y-1.5 max-h-96 overflow-y-auto pr-1">
               {liveListings.map((l, idx) => (
                 <div
                   key={idx}
-                  className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2 text-xs"
+                  title={l.rawMessage || ''}
+                  className="group relative flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2 text-xs transition hover:border-amber-500/50"
                 >
+                  {l.rawMessage && (
+                    <div
+                      className={`pointer-events-none invisible absolute left-2 right-2 z-30 rounded-lg border border-amber-500/40 bg-slate-950/95 p-2.5 shadow-xl backdrop-blur-sm group-hover:visible ${
+                        idx === 0 ? 'top-full mt-1' : 'bottom-full mb-1'
+                      }`}
+                    >
+                      <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-amber-400">
+                        Source Message
+                      </div>
+                      <div className="whitespace-pre-wrap break-words font-mono text-[11px] text-slate-100">
+                        {l.rawMessage}
+                      </div>
+                    </div>
+                  )}
                   <div>
                     <span className="font-bold text-amber-300">{l.listingType}</span>{' '}
                     <span className="font-semibold text-slate-100">{l.itemName}</span> (#{l.itemId})
