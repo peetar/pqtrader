@@ -7,12 +7,18 @@ import {
 } from '@/lib/db';
 import { parseAuctionMessage } from '@/lib/parser/auctionParser';
 
-const DEFAULT_API_KEY = process.env.PQ_INGEST_API_KEY || 'pqtrader-dev-key-2026';
-
 export async function POST(req: NextRequest) {
   try {
+    const configuredKey = process.env.PQ_INGEST_API_KEY;
+    if (!configuredKey) {
+      return NextResponse.json(
+        { error: 'Server misconfigured: PQ_INGEST_API_KEY environment variable is not set.' },
+        { status: 500 }
+      );
+    }
+
     const apiKey = req.headers.get('x-api-key') || '';
-    if (apiKey !== DEFAULT_API_KEY) {
+    if (!apiKey || apiKey !== configuredKey) {
       return NextResponse.json(
         { error: 'Unauthorized: Invalid or missing x-api-key header' },
         { status: 401 }

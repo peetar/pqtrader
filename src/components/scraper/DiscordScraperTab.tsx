@@ -63,7 +63,7 @@ export const DiscordScraperTab: React.FC<DiscordScraperTabProps> = ({
   onToast,
 }) => {
   const [discordToken, setDiscordToken] = useState('');
-  const [apiKey, setApiKey] = useState('pqtrader-dev-key-2026');
+  const [apiKey, setApiKey] = useState('');
   const [channels, setChannels] = useState<DiscordChannelConfig[]>(DEFAULT_CHANNELS);
   const [newChannelName, setNewChannelName] = useState('');
   const [newChannelId, setNewChannelId] = useState('');
@@ -496,7 +496,7 @@ export const DiscordScraperTab: React.FC<DiscordScraperTabProps> = ({
                   setApiKey(e.target.value);
                   saveSettings(discordToken, e.target.value, channels);
                 }}
-                placeholder="pqtrader-dev-key-2026"
+                placeholder="Paste your PQ_INGEST_API_KEY..."
                 className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 focus:border-amber-500 focus:outline-none"
               />
             </div>

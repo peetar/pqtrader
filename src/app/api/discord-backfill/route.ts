@@ -7,8 +7,6 @@ import {
   UpsertListingInput,
 } from '@/lib/db';
 
-const DEFAULT_API_KEY = process.env.PQ_INGEST_API_KEY || 'pqtrader-dev-key-2026';
-
 interface DiscordApiMessage {
   id: string;
   content: string;
@@ -33,6 +31,7 @@ export async function POST(req: NextRequest) {
     const maxPages = Math.min(Math.max(Number(body.maxPages || 1), 1), 30); // 1 page = 100 messages
     const commitToDb = Boolean(body.commitToDb);
     const apiKey = req.headers.get('x-api-key') || String(body.apiKey || '');
+    const configuredKey = process.env.PQ_INGEST_API_KEY;
 
     if (!discordToken || !channelId) {
       return NextResponse.json(
@@ -41,11 +40,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (commitToDb && apiKey !== DEFAULT_API_KEY) {
-      return NextResponse.json(
-        { error: 'Valid Ingest API Key is required when committing backfill results to the database.' },
-        { status: 401 }
-      );
+    if (commitToDb) {
+      if (!configuredKey) {
+        return NextResponse.json(
+          { error: 'Server misconfigured: PQ_INGEST_API_KEY environment variable is not set.' },
+          { status: 500 }
+        );
+      }
+      if (!apiKey || apiKey !== configuredKey) {
+        return NextResponse.json(
+          { error: 'Valid Ingest API Key is required when committing backfill results to the database.' },
+          { status: 401 }
+        );
+      }
     }
 
     const allMessages: DiscordApiMessage[] = [];
