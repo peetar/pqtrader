@@ -34,7 +34,9 @@ export function extractCharacterFromInventoryFileName(fileName: string): string 
 }
 
 export function extractTraderFromBzrFileName(fileName: string): string | null {
-  const match = fileName.match(/^BZR_(.+)_pq\.proj\.ini$/i);
+  const match =
+    fileName.match(/^BZR_(.+?)_pq\.proj(?:\.ini)?$/i) ||
+    fileName.match(/^BZR_(.+?)\.ini$/i);
   return match ? match[1] : null;
 }
 
@@ -230,9 +232,20 @@ export function buildOwnedInventoryCatalog(
     });
   }
 
-  // Aggregate owned items across all character inventories
+  // Aggregate owned items across all character inventories.
+  // Deduplicate SharedBank slots across characters on the same account so they aren't counted 46x.
+  const seenSharedBankSlotKeys = new Set<string>();
+
   for (const inv of inventories) {
     for (const row of inv.items) {
+      if (row.slotCategory === 'SHARED_BANK') {
+        const sbKey = `${row.location.toLowerCase()}::${row.id}::${row.count}`;
+        if (seenSharedBankSlotKeys.has(sbKey)) {
+          continue;
+        }
+        seenSharedBankSlotKeys.add(sbKey);
+      }
+
       const catItem = catalogById ? catalogById[String(row.id)] : undefined;
       const canonicalName = catItem?.name || row.name;
       // In Quarm catalog: nodrop === true means NO DROP
@@ -254,7 +267,7 @@ export function buildOwnedInventoryCatalog(
 
       entry.totalCount += row.count;
       entry.instances.push({
-        characterName: inv.characterName,
+        characterName: row.slotCategory === 'SHARED_BANK' ? 'SharedBank' : inv.characterName,
         location: row.location,
         slotCategory: row.slotCategory,
         inTradersSatchel: row.inTradersSatchel,
@@ -267,12 +280,22 @@ export function buildOwnedInventoryCatalog(
   const activeLowerSet = new Set(Array.from(activeTraderNames).map((n) => n.toLowerCase()));
 
   for (const item of byItemId.values()) {
+    // Sort instances so Trader's Satchel slots always appear first, then character slots, then SharedBank
+    item.instances.sort((a, b) => {
+      if (a.inTradersSatchel !== b.inTradersSatchel) return a.inTradersSatchel ? -1 : 1;
+      const aShared = a.slotCategory === 'SHARED_BANK';
+      const bShared = b.slotCategory === 'SHARED_BANK';
+      if (aShared !== bShared) return aShared ? 1 : -1;
+      return a.characterName.localeCompare(b.characterName);
+    });
+
     if (item.nodrop) continue; // No-Drop items cannot have BZR prices
 
     const normName = normalizeBzrItemKey(item.itemName);
     const owningCharsMap = new Map<string, { charName: string; inTradersSatchel: boolean }>();
 
     for (const inst of item.instances) {
+      if (inst.slotCategory === 'SHARED_BANK') continue;
       const key = inst.characterName.toLowerCase();
       const prev = owningCharsMap.get(key);
       if (!prev || inst.inTradersSatchel) {
@@ -300,7 +323,7 @@ export function buildOwnedInventoryCatalog(
           inTradersSatchel: ownerInfo.inTradersSatchel,
         });
       } else {
-        // Trader does NOT currently hold this item in their Inventory.txt -> stale BZR memory!
+        // Trader does NOT currently hold this item in their personal Inventory.txt -> stale BZR memory!
         item.staleBzrMemory.push({
           traderName: bzrInfo.traderName,
           priceCp: cp,
@@ -308,6 +331,12 @@ export function buildOwnedInventoryCatalog(
         });
       }
     }
+
+    item.activeBzrPrices.sort((a, b) => {
+      if (a.inTradersSatchel !== b.inTradersSatchel) return a.inTradersSatchel ? -1 : 1;
+      if (a.isActiveTrader !== b.isActiveTrader) return a.isActiveTrader ? -1 : 1;
+      return a.characterName.localeCompare(b.characterName);
+    });
   }
 
   return Array.from(byItemId.values()).sort((a, b) =>

@@ -90,7 +90,7 @@ export default function PQTraderApp() {
     return () => clearTimeout(t);
   }, [toastMessage]);
 
-  // Load saved active traders from localStorage
+  // Load saved active traders & cached TAKP inventories/BZR files from localStorage
   useEffect(() => {
     const saved = localStorage.getItem('pqtrader_active_traders');
     if (saved) {
@@ -99,7 +99,42 @@ export default function PQTraderApp() {
         if (Array.isArray(arr)) setActiveTraders(new Set(arr));
       } catch {}
     }
+
+    try {
+      const cachedInvs = localStorage.getItem('pqtrader_cached_inventories');
+      const cachedBzrs = localStorage.getItem('pqtrader_cached_bzrs');
+      const cachedLabel = localStorage.getItem('pqtrader_cached_folder_label');
+      if (cachedInvs) {
+        const parsedInvs = JSON.parse(cachedInvs);
+        if (Array.isArray(parsedInvs) && parsedInvs.length > 0) {
+          setInventories(parsedInvs);
+          setFolderMode('BROWSER_FS');
+          setFolderLabel(cachedLabel || 'TAKPv22');
+        }
+      }
+      if (cachedBzrs) {
+        const parsedBzrs = JSON.parse(cachedBzrs);
+        if (Array.isArray(parsedBzrs) && parsedBzrs.length > 0) {
+          setBzrFiles(parsedBzrs);
+        }
+      }
+    } catch {}
   }, []);
+
+  const persistTakpCache = useCallback(
+    (
+      nextInvs: ParsedCharacterInventory[],
+      nextBzrs: BzrTraderFile[],
+      label: string
+    ) => {
+      try {
+        localStorage.setItem('pqtrader_cached_inventories', JSON.stringify(nextInvs));
+        localStorage.setItem('pqtrader_cached_bzrs', JSON.stringify(nextBzrs));
+        localStorage.setItem('pqtrader_cached_folder_label', label);
+      } catch {}
+    },
+    []
+  );
 
   // Load 26,972 Item Catalog
   useEffect(() => {
@@ -137,7 +172,7 @@ export default function PQTraderApp() {
         if (!res.ok) {
           if (!silent) {
             showToast(
-              'Local C:\\TAKPv22 shortcut is only available when running locally. Use "Pick TAKP Folder (Browser File API)" instead!'
+              'Local C:\\TAKPv22 shortcut is only available when running locally. Use "Pick TAKP Folder" instead!'
             );
           }
           return;
@@ -154,27 +189,95 @@ export default function PQTraderApp() {
             parseBzrIni(f.fileName, f.content)
         );
 
+        const label = data.dirPath || 'C:\\TAKPv22';
         setInventories(parsedInvs);
         setBzrFiles(parsedBzrs);
         setFolderMode('LOCAL_HOST');
-        setFolderLabel(data.dirPath || 'C:\\TAKPv22');
+        setFolderLabel(label);
+        persistTakpCache(parsedInvs, parsedBzrs, label);
         if (!silent) {
           showToast(
-            `Loaded ${parsedInvs.length} character inventories and ${parsedBzrs.length} BZR INI files from ${data.dirPath}!`
+            `Loaded ${parsedInvs.length} character inventories and ${parsedBzrs.length} BZR INI files from ${label}!`
           );
         }
       } catch {
         if (!silent) showToast('Could not load local C:\\TAKPv22 directory.');
       }
     },
-    [showToast]
+    [showToast, persistTakpCache]
   );
 
   useEffect(() => {
     handleConnectLocalTakp(true);
   }, [handleConnectLocalTakp]);
 
-  // Connect TAKP Folder via Chromium File System Access API (works on Vercel!)
+  /**
+   * Scans a FileList from <input type="file" webkitdirectory /> or <input type="file" multiple accept=".ini,.txt" />.
+   * Unlike window.showDirectoryPicker() (where Chromium on Windows blocks .ini files),
+   * standard <input type="file"> reads both *-Inventory.txt and BZR_*_pq.proj.ini files on Vercel!
+   */
+  const handleUploadTakpFiles = useCallback(
+    async (fileList: FileList | null) => {
+      if (!fileList || fileList.length === 0) return;
+
+      const invByFileName = new Map<string, ParsedCharacterInventory>();
+      for (const existing of inventories) {
+        invByFileName.set(existing.fileName.toLowerCase(), existing);
+      }
+
+      const bzrByFileName = new Map<string, BzrTraderFile>();
+      for (const existing of bzrFiles) {
+        bzrByFileName.set(existing.fileName.toLowerCase(), existing);
+      }
+
+      let scannedInvs = 0;
+      let scannedBzrs = 0;
+      let detectedFolderName = folderLabel || 'TAKPv22';
+
+      for (let i = 0; i < fileList.length; i++) {
+        const file = fileList[i];
+        const relPath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || '';
+        if (relPath) {
+          const parts = relPath.split('/');
+          // Skip nested subfolders (like uifiles/, maps/, logs/) for instant scanning
+          if (parts.length > 2) continue;
+          if (parts[0]) detectedFolderName = parts[0];
+        }
+
+        const name = file.name;
+        if (/-Inventory\.txt$/i.test(name)) {
+          const content = await file.text();
+          invByFileName.set(name.toLowerCase(), parseInventoryTxt(name, content));
+          scannedInvs++;
+        } else if (/^BZR_.+?\.ini$/i.test(name)) {
+          const content = await file.text();
+          bzrByFileName.set(name.toLowerCase(), parseBzrIni(name, content));
+          scannedBzrs++;
+        }
+      }
+
+      const nextInvs = Array.from(invByFileName.values()).sort((a, b) =>
+        a.characterName.localeCompare(b.characterName)
+      );
+      const nextBzrs = Array.from(bzrByFileName.values()).sort((a, b) =>
+        a.traderName.localeCompare(b.traderName)
+      );
+
+      setInventories(nextInvs);
+      setBzrFiles(nextBzrs);
+      setFolderMode('BROWSER_FS');
+      setFolderLabel(detectedFolderName);
+      persistTakpCache(nextInvs, nextBzrs, detectedFolderName);
+
+      const traderIniCount = nextBzrs.filter((b) => !b.isUtilityIni).length;
+      showToast(
+        `Loaded ${scannedInvs} inventory file(s) and ${scannedBzrs} BZR INI file(s) (${nextInvs.length} chars · ${traderIniCount} trader INIs total)!`
+      );
+    },
+    [inventories, bzrFiles, folderLabel, persistTakpCache, showToast]
+  );
+
+  // Connect TAKP Folder via Chromium File System Access API
   const scanBrowserDirHandle = useCallback(
     async (dirHandle: FsDirHandle) => {
       const parsedInvs: ParsedCharacterInventory[] = [];
@@ -183,26 +286,32 @@ export default function PQTraderApp() {
       for await (const entry of dirHandle.values()) {
         if (entry.kind !== 'file') continue;
         const fHandle = entry as FsFileHandle;
-        if (/-Inventory\.txt$/i.test(fHandle.name)) {
-          const file = await fHandle.getFile();
-          const content = await file.text();
-          parsedInvs.push(parseInventoryTxt(fHandle.name, content));
-        } else if (/^BZR_.+_pq\.proj\.ini$/i.test(fHandle.name)) {
-          const file = await fHandle.getFile();
-          const content = await file.text();
-          parsedBzrs.push(parseBzrIni(fHandle.name, content));
-        }
+        try {
+          if (/-Inventory\.txt$/i.test(fHandle.name)) {
+            const file = await fHandle.getFile();
+            const content = await file.text();
+            parsedInvs.push(parseInventoryTxt(fHandle.name, content));
+          } else if (/^BZR_.+?\.ini$/i.test(fHandle.name)) {
+            const file = await fHandle.getFile();
+            const content = await file.text();
+            parsedBzrs.push(parseBzrIni(fHandle.name, content));
+          }
+        } catch {}
       }
 
+      // Preserve any previously loaded BZR files if Chromium's showDirectoryPicker filtered out .ini files
+      const finalBzrs = parsedBzrs.length > 0 ? parsedBzrs : bzrFiles;
+
       setInventories(parsedInvs);
-      setBzrFiles(parsedBzrs);
+      setBzrFiles(finalBzrs);
       setFolderMode('BROWSER_FS');
       setFolderLabel(dirHandle.name);
+      persistTakpCache(parsedInvs, finalBzrs, dirHandle.name);
       showToast(
-        `Scanned ${parsedInvs.length} character inventories and ${parsedBzrs.length} BZR INI files from "${dirHandle.name}"!`
+        `Scanned ${parsedInvs.length} character inventories and ${finalBzrs.filter((b) => !b.isUtilityIni).length} trader BZR INI files from "${dirHandle.name}"!`
       );
     },
-    [showToast]
+    [bzrFiles, persistTakpCache, showToast]
   );
 
   const handleConnectBrowserFolder = async () => {
@@ -212,11 +321,11 @@ export default function PQTraderApp() {
       };
       if (!win.showDirectoryPicker) {
         showToast(
-          'Your browser does not support window.showDirectoryPicker(). Please use Chrome, Edge, or Brave.'
+          'Your browser does not support window.showDirectoryPicker(). Please use "Pick TAKP Folder" instead.'
         );
         return;
       }
-      const dirHandle = await win.showDirectoryPicker({ mode: 'readwrite' });
+      const dirHandle = await win.showDirectoryPicker({ mode: 'read' });
       browserDirHandleRef.current = dirHandle;
       await scanBrowserDirHandle(dirHandle);
     } catch (err: unknown) {
@@ -226,10 +335,12 @@ export default function PQTraderApp() {
   };
 
   const handleRescanFolder = async () => {
-    if (folderMode === 'BROWSER_FS' && browserDirHandleRef.current) {
-      await scanBrowserDirHandle(browserDirHandleRef.current);
-    } else if (folderMode === 'LOCAL_HOST') {
+    if (folderMode === 'LOCAL_HOST') {
       await handleConnectLocalTakp(false);
+    } else if (folderMode === 'BROWSER_FS' && browserDirHandleRef.current) {
+      await scanBrowserDirHandle(browserDirHandleRef.current);
+    } else {
+      showToast('Use "Pick TAKP Folder" or "Load BZR .ini Files" to refresh files from disk.');
     }
   };
 
@@ -263,23 +374,8 @@ export default function PQTraderApp() {
       };
     });
 
-    if (folderMode === 'BROWSER_FS' && browserDirHandleRef.current) {
-      const dirHandle = browserDirHandleRef.current;
-      for (const bzr of updatedBzrFiles) {
-        if (!targetLower.has(bzr.traderName.toLowerCase())) continue;
-        const fileHandle = await dirHandle.getFileHandle(bzr.fileName, { create: true });
-        const writable = await fileHandle.createWritable();
-        await writable.write(serializeBzrIni(bzr.pricesByItemName));
-        await writable.close();
-      }
-      setBzrFiles(updatedBzrFiles);
-      showToast(
-        `Wrote ${itemName}=${priceCp} (${pricePp.toLocaleString()} pp) to ${
-          targetTraderNames.length
-        } BZR_*.ini file(s)!`
-      );
-      return;
-    }
+    setBzrFiles(updatedBzrFiles);
+    persistTakpCache(inventories, updatedBzrFiles, folderLabel);
 
     if (folderMode === 'LOCAL_HOST') {
       const updates = updatedBzrFiles
@@ -299,14 +395,57 @@ export default function PQTraderApp() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to update BZR INI files');
-      setBzrFiles(updatedBzrFiles);
       showToast(
         `Updated ${data.updatedFiles.join(', ')} with ${itemName}=${priceCp} (${pricePp.toLocaleString()} pp)!`
       );
       return;
     }
 
-    showToast('Connect your TAKP folder first before writing to BZR INI files.');
+    // In Browser mode (Vercel), Chromium blocks direct writes to .ini files via FileSystemAccess API,
+    // so we try direct write first and fall back to downloading the updated BZR_<char>_pq.proj.ini file.
+    let wroteDirectly = false;
+    if (browserDirHandleRef.current) {
+      try {
+        const dirHandle = browserDirHandleRef.current;
+        for (const bzr of updatedBzrFiles) {
+          if (!targetLower.has(bzr.traderName.toLowerCase())) continue;
+          const fileHandle = await dirHandle.getFileHandle(bzr.fileName, { create: true });
+          const writable = await fileHandle.createWritable();
+          await writable.write(serializeBzrIni(bzr.pricesByItemName));
+          await writable.close();
+        }
+        wroteDirectly = true;
+      } catch {
+        wroteDirectly = false;
+      }
+    }
+
+    if (wroteDirectly) {
+      showToast(
+        `Wrote ${itemName}=${priceCp} (${pricePp.toLocaleString()} pp) to ${
+          targetTraderNames.length
+        } BZR_*.ini file(s)!`
+      );
+      return;
+    }
+
+    // Trigger clean file download for each updated BZR_<char>_pq.proj.ini
+    for (const bzr of updatedBzrFiles) {
+      if (!targetLower.has(bzr.traderName.toLowerCase())) continue;
+      const content = serializeBzrIni(bzr.pricesByItemName);
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = bzr.fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+    showToast(
+      `Updated ${itemName}=${priceCp} (${pricePp.toLocaleString()} pp) and downloaded updated BZR_*.ini file(s)!`
+    );
   };
 
   const catalogList = useMemo(() => Object.values(catalogById), [catalogById]);
@@ -457,6 +596,7 @@ export default function PQTraderApp() {
                 rollups={rollups}
                 initialSelectedItemId={jumpToMyItemId}
                 onConnectBrowserFolder={handleConnectBrowserFolder}
+                onUploadTakpFiles={handleUploadTakpFiles}
                 onConnectLocalTakp={() => handleConnectLocalTakp(false)}
                 onRescanFolder={handleRescanFolder}
                 onToggleActiveTrader={handleToggleActiveTrader}

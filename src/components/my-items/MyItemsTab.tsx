@@ -56,6 +56,7 @@ interface MyItemsTabProps {
   rollups: Record<number, MarketRollupEntry>;
   initialSelectedItemId?: number | null;
   onConnectBrowserFolder: () => Promise<void>;
+  onUploadTakpFiles: (files: FileList | null) => Promise<void>;
   onConnectLocalTakp: () => Promise<void>;
   onRescanFolder: () => Promise<void>;
   onToggleActiveTrader: (traderName: string) => void;
@@ -79,6 +80,7 @@ export const MyItemsTab: React.FC<MyItemsTabProps> = ({
   rollups,
   initialSelectedItemId,
   onConnectBrowserFolder,
+  onUploadTakpFiles,
   onConnectLocalTakp,
   onRescanFolder,
   onToggleActiveTrader,
@@ -86,6 +88,9 @@ export const MyItemsTab: React.FC<MyItemsTabProps> = ({
   onRefreshMarket,
   onToast,
 }) => {
+  const folderInputRef = React.useRef<HTMLInputElement | null>(null);
+  const filesInputRef = React.useRef<HTMLInputElement | null>(null);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [showNoDrop, setShowNoDrop] = useState(false);
   const [selectedCharFilter, setSelectedCharFilter] = useState<string>('ALL');
@@ -162,16 +167,31 @@ export const MyItemsTab: React.FC<MyItemsTabProps> = ({
         if (!cancelled) setLoadingMarket(false);
       });
 
+    // Prefer the currently filtered character's BZR price if one is selected
+    const charFilterLower =
+      selectedCharFilter !== 'ALL' ? selectedCharFilter.toLowerCase() : null;
+    const preferredActivePrice = charFilterLower
+      ? selectedOwnedItem.activeBzrPrices.find(
+          (ap) => ap.characterName.toLowerCase() === charFilterLower
+        ) || selectedOwnedItem.activeBzrPrices[0]
+      : selectedOwnedItem.activeBzrPrices[0];
+
+    const preferredInstance = charFilterLower
+      ? selectedOwnedItem.instances.find(
+          (inst) => inst.characterName.toLowerCase() === charFilterLower
+        ) || selectedOwnedItem.instances[0]
+      : selectedOwnedItem.instances[0];
+
     // Pre-fill price from active BZR price or stale BZR memory
-    if (selectedOwnedItem.activeBzrPrices.length > 0) {
-      setSellPricePp(String(selectedOwnedItem.activeBzrPrices[0].pricePp));
-      setSellActorName(selectedOwnedItem.activeBzrPrices[0].characterName);
+    if (preferredActivePrice) {
+      setSellPricePp(String(preferredActivePrice.pricePp));
+      setSellActorName(preferredActivePrice.characterName);
     } else if (selectedOwnedItem.staleBzrMemory.length > 0) {
       setSellPricePp(String(selectedOwnedItem.staleBzrMemory[0].pricePp));
-      setSellActorName(selectedOwnedItem.instances[0]?.characterName || 'Derpydoodle');
+      setSellActorName(preferredInstance?.characterName || 'Zondrop');
     } else {
       setSellPricePp('');
-      setSellActorName(selectedOwnedItem.instances[0]?.characterName || 'Derpydoodle');
+      setSellActorName(preferredInstance?.characterName || 'Zondrop');
     }
 
     // Pre-select BZR files for active traders (prioritizing traders who actually hold this item!)
@@ -192,27 +212,49 @@ export const MyItemsTab: React.FC<MyItemsTabProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [selectedOwnedItem, characterBzrFiles, activeTraders]);
+  }, [selectedOwnedItem, characterBzrFiles, activeTraders, selectedCharFilter]);
 
   const filteredOwnedItems = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
+    const charLower =
+      selectedCharFilter !== 'ALL' ? selectedCharFilter.toLowerCase() : null;
+
     return ownedItems.filter((item) => {
       if (!showNoDrop && item.nodrop) return false;
 
-      if (selectedCharFilter !== 'ALL') {
+      if (charLower) {
         const hasChar = item.instances.some(
-          (inst) => inst.characterName.toLowerCase() === selectedCharFilter.toLowerCase()
+          (inst) => inst.characterName.toLowerCase() === charLower
         );
         if (!hasChar) return false;
       }
 
       if (statusFilter === 'IN_SATCHEL') {
-        if (!item.instances.some((inst) => inst.inTradersSatchel)) return false;
+        const inSatchel = item.instances.some(
+          (inst) =>
+            inst.inTradersSatchel &&
+            (!charLower || inst.characterName.toLowerCase() === charLower)
+        );
+        if (!inSatchel) return false;
       } else if (statusFilter === 'PRICED_ACTIVE') {
-        if (!item.activeBzrPrices.some((b) => b.isActiveTrader && b.pricePp > 0)) return false;
+        const pricedOnActive = item.activeBzrPrices.some(
+          (b) =>
+            b.isActiveTrader &&
+            b.pricePp > 0 &&
+            (!charLower || b.characterName.toLowerCase() === charLower)
+        );
+        if (!pricedOnActive) return false;
       } else if (statusFilter === 'UNPRICED_SATCHEL') {
-        const inSatchel = item.instances.some((inst) => inst.inTradersSatchel);
-        const hasPrice = item.activeBzrPrices.some((b) => b.pricePp > 0);
+        const inSatchel = item.instances.some(
+          (inst) =>
+            inst.inTradersSatchel &&
+            (!charLower || inst.characterName.toLowerCase() === charLower)
+        );
+        const hasPrice = item.activeBzrPrices.some(
+          (b) =>
+            b.pricePp > 0 &&
+            (!charLower || b.characterName.toLowerCase() === charLower)
+        );
         if (!inSatchel || hasPrice) return false;
       } else if (statusFilter === 'SPELLS') {
         if (
@@ -367,6 +409,31 @@ export const MyItemsTab: React.FC<MyItemsTabProps> = ({
     <div className="space-y-5">
       {/* Top Bar: TAKP Folder Connection + Active Traders Selection */}
       <div className="rounded-xl border border-slate-800 bg-slate-900/90 p-4 shadow">
+        {/* Hidden inputs that read both *-Inventory.txt and BZR_*.ini files without Chrome's showDirectoryPicker .ini block */}
+        <input
+          ref={folderInputRef}
+          type="file"
+          multiple
+          // @ts-expect-error webkitdirectory is supported in all modern browsers
+          webkitdirectory=""
+          className="hidden"
+          onChange={(e) => {
+            onUploadTakpFiles(e.target.files);
+            e.target.value = '';
+          }}
+        />
+        <input
+          ref={filesInputRef}
+          type="file"
+          multiple
+          accept=".ini,.txt"
+          className="hidden"
+          onChange={(e) => {
+            onUploadTakpFiles(e.target.files);
+            e.target.value = '';
+          }}
+        />
+
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
@@ -392,20 +459,32 @@ export const MyItemsTab: React.FC<MyItemsTabProps> = ({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={onConnectBrowserFolder}
+              onClick={() => folderInputRef.current?.click()}
               className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/50 bg-amber-500/15 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-500/25"
+              title="Reads all *-Inventory.txt and BZR_*_pq.proj.ini files from your TAKP folder"
             >
               <FolderOpen className="h-4 w-4" />
-              Pick TAKP Folder (Browser File API)
+              Pick TAKP Folder (.txt + .ini)
+            </button>
+
+            <button
+              type="button"
+              onClick={() => filesInputRef.current?.click()}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/25"
+              title="Select one or more BZR_<char>_pq.proj.ini or <char>-Inventory.txt files directly"
+            >
+              <UploadCloud className="h-4 w-4" />
+              Load BZR_*.ini Files
             </button>
 
             <button
               type="button"
               onClick={onConnectLocalTakp}
               className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/15 px-3 py-2 text-xs font-semibold text-sky-300 hover:bg-sky-500/25"
+              title="Only works when running PQ Trader locally on your PC"
             >
               <HardDrive className="h-4 w-4" />
-              Load C:\TAKPv22
+              Local C:\TAKPv22
             </button>
 
             {folderMode !== 'NONE' && (
@@ -415,11 +494,34 @@ export const MyItemsTab: React.FC<MyItemsTabProps> = ({
                 className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-medium text-slate-200 hover:bg-slate-700"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
-                Rescan Files
+                Rescan
               </button>
             )}
           </div>
         </div>
+
+        {/* Helpful alert if inventories are loaded but 0 BZR INI files were loaded */}
+        {inventories.length > 0 && characterBzrFiles.length === 0 && (
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-950/30 px-3.5 py-2.5 text-xs text-amber-200">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+              <span>
+                <strong>0 Trader INI files loaded:</strong> Windows browsers block{' '}
+                <code>.ini</code> files in the older Directory Picker API. Click{' '}
+                <strong>Pick TAKP Folder (.txt + .ini)</strong> or{' '}
+                <strong>Load BZR_*.ini Files</strong> to import your{' '}
+                <code>BZR_Zondrop_pq.proj.ini</code> prices!
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => filesInputRef.current?.click()}
+              className="rounded-md bg-amber-500 px-2.5 py-1 text-xs font-bold text-slate-950 hover:bg-amber-400"
+            >
+              Select BZR_*.ini Files Now
+            </button>
+          </div>
+        )}
 
         {/* Active Traders Selector & Batch Sync Controls */}
         {characterBzrFiles.length > 0 && (
@@ -575,8 +677,24 @@ export const MyItemsTab: React.FC<MyItemsTabProps> = ({
                 {filteredOwnedItems.slice(0, 200).map((item) => {
                   const isSelected = selectedItemId === item.itemId;
                   const r = rollups[item.itemId];
-                  const activePrices = item.activeBzrPrices;
+                  const charLower =
+                    selectedCharFilter !== 'ALL' ? selectedCharFilter.toLowerCase() : null;
+                  const primaryActivePrice = charLower
+                    ? item.activeBzrPrices.find(
+                        (ap) => ap.characterName.toLowerCase() === charLower
+                      ) || item.activeBzrPrices[0]
+                    : item.activeBzrPrices[0];
                   const stalePrices = item.staleBzrMemory;
+                  const sortedInstances = charLower
+                    ? [
+                        ...item.instances.filter(
+                          (inst) => inst.characterName.toLowerCase() === charLower
+                        ),
+                        ...item.instances.filter(
+                          (inst) => inst.characterName.toLowerCase() !== charLower
+                        ),
+                      ]
+                    : item.instances;
 
                   return (
                     <button
@@ -610,7 +728,7 @@ export const MyItemsTab: React.FC<MyItemsTabProps> = ({
 
                           {/* Character & Slot Breakdown Badges */}
                           <div className="mt-1.5 flex flex-wrap gap-1">
-                            {item.instances.slice(0, 4).map((inst, idx) => (
+                            {sortedInstances.slice(0, 4).map((inst, idx) => (
                               <span
                                 key={`${inst.characterName}-${inst.location}-${idx}`}
                                 className={`rounded px-1.5 py-0.5 text-[10px] ${
@@ -623,9 +741,9 @@ export const MyItemsTab: React.FC<MyItemsTabProps> = ({
                                 {inst.count > 1 ? ` (${inst.count})` : ''}
                               </span>
                             ))}
-                            {item.instances.length > 4 && (
+                            {sortedInstances.length > 4 && (
                               <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">
-                                +{item.instances.length - 4} more
+                                +{sortedInstances.length - 4} more
                               </span>
                             )}
                           </div>
@@ -633,16 +751,18 @@ export const MyItemsTab: React.FC<MyItemsTabProps> = ({
 
                         {/* Right Side: My BZR Price & Market Summary */}
                         <div className="flex flex-col items-end gap-1 text-right text-[11px]">
-                          {activePrices.length > 0 ? (
+                          {primaryActivePrice ? (
                             <span className="rounded border border-emerald-500/40 bg-emerald-950/70 px-2 py-0.5 font-semibold text-emerald-300">
-                              My BZR: {activePrices[0].pricePp.toLocaleString()} pp
+                              {primaryActivePrice.characterName} BZR:{' '}
+                              {primaryActivePrice.pricePp.toLocaleString()} pp
                             </span>
                           ) : stalePrices.length > 0 ? (
                             <span
                               title={`Stale price in BZR_${stalePrices[0].traderName}_pq.proj.ini (item not held by ${stalePrices[0].traderName})`}
                               className="rounded border border-slate-700 bg-slate-800/80 px-2 py-0.5 text-[10px] text-slate-400"
                             >
-                              Old INI: {stalePrices[0].pricePp.toLocaleString()}p
+                              Old INI ({stalePrices[0].traderName}):{' '}
+                              {stalePrices[0].pricePp.toLocaleString()}p
                             </span>
                           ) : !item.nodrop ? (
                             <span className="text-[10px] text-slate-500">Unpriced</span>

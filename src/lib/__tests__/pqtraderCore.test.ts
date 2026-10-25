@@ -382,6 +382,21 @@ describe('PQ Trader — TAKP Inventory.txt & BZR_*.ini Intersection Engine', () 
     const syncPayload = buildActiveTraderSyncPayload(owned);
     expect(syncPayload.length).toBeGreaterThan(0);
     expect(syncPayload.every((p) => !catalogById[String(p.itemId)]?.nodrop)).toBe(true);
+
+    // Verify Zondrop's Arachnid Antennae (#7122, Arachnid Antennae=5000000 in BZR_Zondrop_pq.proj.ini)
+    // has Zondrop's 5,000 pp price as its primary activeBzrPrice and SharedBank is deduplicated
+    const arachnid = owned.find((i) => i.itemId === 7122);
+    expect(arachnid).toBeDefined();
+    expect(arachnid?.activeBzrPrices[0]).toMatchObject({
+      characterName: 'Zondrop',
+      priceCp: 5000000,
+      pricePp: 5000,
+      isActiveTrader: true,
+    });
+    // Only Zondrop holds Arachnid Antennae in character slots (plus 1 deduplicated SharedBank slot),
+    // so Derpydoodle/Zondromule's old INI entries should be in staleBzrMemory, not activeBzrPrices
+    expect(arachnid?.activeBzrPrices).toHaveLength(1);
+    expect(arachnid?.instances.filter((inst) => inst.characterName === 'SharedBank')).toHaveLength(1);
   });
 });
 
